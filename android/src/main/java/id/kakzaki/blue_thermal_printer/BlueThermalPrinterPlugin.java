@@ -56,6 +56,8 @@ import com.journeyapps.barcodescanner.BarcodeEncoder;
 
 public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware,MethodCallHandler, RequestPermissionsResultListener {
 
+  private int paperWidth = 384; // Default 58mm width
+  private int currentFont = 0; // 0=small, 1=medium, 2=large
   private static final String TAG = "BThermalPrinterPlugin";
   private static final String NAMESPACE = "blue_thermal_printer";
   private static final int REQUEST_COARSE_LOCATION_PERMISSIONS = 1451;
@@ -189,6 +191,22 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware,Me
 
     final Map<String, Object> arguments = call.arguments();
     switch (call.method) {
+
+      case "setPaperSize":
+        int size = call.argument("size");
+        setPaperSize(result, size);
+        break;
+
+      case "setDefaultFont":
+        int font = call.argument("font");
+        setDefaultFont(result, font);
+        break;
+
+      case "printRow":
+        List<Map<String, Object>> columns = call.argument("columns");
+        Map<String, Object> styles = call.argument("styles");
+        printRow(result, columns, styles);
+        break;
 
       case "state":
         state(result);
@@ -444,6 +462,39 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware,Me
     }
   }
 
+  private void setPaperSize(Result result, int size) {
+    switch (size) {
+      case 1: // 58mm
+        paperWidth = 384;
+        THREAD.write(PrinterCommands.PAPER_SIZE_58MM);
+        break;
+      case 2: // 72mm
+        paperWidth = 512;
+        THREAD.write(PrinterCommands.PAPER_SIZE_72MM);
+        break;
+      case 3: // 80mm
+        paperWidth = 576;
+        THREAD.write(PrinterCommands.PAPER_SIZE_80MM);
+        break;
+    }
+    result.success(true);
+  }
+
+  private void setDefaultFont(Result result, int font) {
+    currentFont = font;
+    switch (font) {
+      case 1:
+        THREAD.write(PrinterCommands.FONT_MEDIUM);
+        break;
+      case 2:
+        THREAD.write(PrinterCommands.FONT_LARGE);
+        break;
+      default:
+        THREAD.write(PrinterCommands.FONT_SMALL);
+    }
+    result.success(true);
+  }
+
   /**
    * @param result result
    */
@@ -599,64 +650,21 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware,Me
   }
 
   private void printCustom(Result result, String message, int size, int align, String charset) {
-    // Print config "mode"
-    byte[] cc = new byte[] { 0x1B, 0x21, 0x03 }; // 0- normal size text
-    // byte[] cc1 = new byte[]{0x1B,0x21,0x00}; // 0- normal size text
-    byte[] bb = new byte[] { 0x1B, 0x21, 0x08 }; // 1- only bold text
-    byte[] bb2 = new byte[] { 0x1B, 0x21, 0x20 }; // 2- bold with medium text
-    byte[] bb3 = new byte[] { 0x1B, 0x21, 0x10 }; // 3- bold with large text
-    byte[] bb4 = new byte[] { 0x1B, 0x21, 0x30 }; // 4- strong text
-    byte[] bb5 = new byte[] { 0x1B, 0x21, 0x50 }; // 5- extra strong text
-    if (THREAD == null) {
-      result.error("write_error", "not connected", null);
-      return;
-    }
-
     try {
-      switch (size) {
-        case 0:
-          THREAD.write(cc);
-          break;
-        case 1:
-          THREAD.write(bb);
-          break;
-        case 2:
-          THREAD.write(bb2);
-          break;
-        case 3:
-          THREAD.write(bb3);
-          break;
-        case 4:
-          THREAD.write(bb4);
-          break;
-        case 5:
-          THREAD.write(bb5);
-      }
+      // Use current font instead of size parameter
+      THREAD.write(getFontCommand(currentFont));
+      THREAD.write(getAlignCommand(align));
 
-      switch (align) {
-        case 0:
-          // left align
-          THREAD.write(PrinterCommands.ESC_ALIGN_LEFT);
-          break;
-        case 1:
-          // center align
-          THREAD.write(PrinterCommands.ESC_ALIGN_CENTER);
-          break;
-        case 2:
-          // right align
-          THREAD.write(PrinterCommands.ESC_ALIGN_RIGHT);
-          break;
-      }
       if(charset != null) {
         THREAD.write(message.getBytes(charset));
       } else {
         THREAD.write(message.getBytes());
       }
+
       THREAD.write(PrinterCommands.FEED_LINE);
       result.success(true);
     } catch (Exception ex) {
-      Log.e(TAG, ex.getMessage(), ex);
-      result.error("write_error", ex.getMessage(), exceptionToString(ex));
+      result.error("WRITE_ERROR", ex.getMessage(), exceptionToString(ex));
     }
   }
 
@@ -1048,4 +1056,73 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware,Me
       readSink = null;
     }
   };
+
+  private void printRow(Result result, List<Map<String, Object>> columns, Map<String, Object> styles) {
+    try {
+      List<byte[]> columnData = new ArrayList<>();
+      int totalWidth = paperWidth;
+
+      // Apply styles
+      if (styles != null) {
+        if (styles.containsKey("bold") && (boolean) styles.get("bold")) {
+          THREAD.write(PrinterCommands.ESC_EMPHASIZED_ON);
+        }
+        if (styles.containsKey("align")) {
+          int align = (int) styles.get("align");
+          switch (align) {
+            case 1:
+              THREAD.write(PrinterCommands.ESC_ALIGN_CENTER);
+              break;
+            case 2:
+              THREAD.write(PrinterCommands.ESC_ALIGN_RIGHT);
+              break;
+            default:
+              THREAD.write(PrinterCommands.ESC_ALIGN_LEFT);
+          }
+        }
+      }
+
+      // Calculate column widths
+      for (Map<String, Object> column : columns) {
+        double widthRatio = (double) column.get("widthRatio");
+        String text = (String) column.get("text");
+        int align = (int) column.get("align");
+
+        byte[] alignCmd = getAlignCommand(align);
+        byte[] fontCmd = getFontCommand(currentFont);
+        byte[] textBytes = text.getBytes("UTF-8");
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        outputStream.write(alignCmd);
+        outputStream.write(fontCmd);
+        outputStream.write(textBytes);
+        columnData.add(outputStream.toByteArray());
+      }
+
+      // Send column data
+      for (byte[] column : columnData) {
+        THREAD.write(column);
+      }
+
+      result.success(true);
+    } catch (Exception ex) {
+      result.error("PRINT_ERROR", ex.getMessage(), exceptionToString(ex));
+    }
+  }
+
+  private byte[] getAlignCommand(int align) {
+    switch (align) {
+      case 1: return PrinterCommands.ESC_ALIGN_CENTER;
+      case 2: return PrinterCommands.ESC_ALIGN_RIGHT;
+      default: return PrinterCommands.ESC_ALIGN_LEFT;
+    }
+  }
+
+  private byte[] getFontCommand(int font) {
+    switch (font) {
+      case 1: return PrinterCommands.FONT_MEDIUM;
+      case 2: return PrinterCommands.FONT_LARGE;
+      default: return PrinterCommands.FONT_SMALL;
+    }
+  }
 }

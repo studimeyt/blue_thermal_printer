@@ -63,4 +63,14 @@ public class PrinterCommands {
     public static final byte[] ESC_ENTER = new byte[] { 0x1B, 0x4A, 0x40 };
     public static final byte[] PRINTE_TEST = new byte[] { 0x1D, 0x28, 0x41 };
 
+    public static final byte[] PAPER_SIZE_58MM = new byte[]{0x1D, 0x50, 0x30, 0x0A};
+    public static final byte[] PAPER_SIZE_72MM = new byte[]{0x1D, 0x50, 0x20, 0x0A};
+    public static final byte[] PAPER_SIZE_80MM = new byte[]{0x1D, 0x50, 0x18, 0x0A};
+
+    // Font commands
+    public static final byte[] FONT_SMALL = new byte[]{0x1D, 0x21, 0x00};
+    public static final byte[] FONT_MEDIUM = new byte[]{0x1D, 0x21, 0x01};
+    public static final byte[] FONT_LARGE = new byte[]{0x1D, 0x21, 0x11};
+
+
 }
